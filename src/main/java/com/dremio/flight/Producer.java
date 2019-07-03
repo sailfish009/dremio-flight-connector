@@ -15,6 +15,7 @@
  */
 package com.dremio.flight;
 
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -26,6 +27,7 @@ import javax.inject.Provider;
 import org.apache.arrow.flight.Action;
 import org.apache.arrow.flight.ActionType;
 import org.apache.arrow.flight.Criteria;
+import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightInfo;
@@ -47,7 +49,13 @@ import org.slf4j.LoggerFactory;
 import com.dremio.common.exceptions.UserException;
 import com.dremio.common.exceptions.UserRemoteException;
 import com.dremio.common.utils.protos.ExternalIdHelper;
+import com.dremio.common.utils.protos.QueryIdHelper;
 import com.dremio.common.utils.protos.QueryWritableBatch;
+import com.dremio.datastore.KVStore;
+import com.dremio.exec.physical.config.UnionExchange;
+import com.dremio.exec.planner.fragment.PlanningSet;
+import com.dremio.exec.planner.fragment.Wrapper;
+import com.dremio.exec.proto.CoordinationProtos;
 import com.dremio.exec.proto.GeneralRPCProtos.Ack;
 import com.dremio.exec.proto.UserBitShared;
 import com.dremio.exec.proto.UserBitShared.QueryResult.QueryState;
@@ -61,6 +69,7 @@ import com.dremio.exec.proto.UserProtos.RequestStatus;
 import com.dremio.exec.proto.UserProtos.ResultColumnMetadata;
 import com.dremio.exec.proto.UserProtos.RpcType;
 import com.dremio.exec.proto.UserProtos.RunQuery;
+import com.dremio.exec.proto.beans.CoreOperatorType;
 import com.dremio.exec.record.RecordBatchLoader;
 import com.dremio.exec.rpc.Acks;
 import com.dremio.exec.rpc.RpcOutcomeListener;
@@ -70,6 +79,14 @@ import com.dremio.exec.work.protector.UserRequest;
 import com.dremio.exec.work.protector.UserResponseHandler;
 import com.dremio.exec.work.protector.UserResult;
 import com.dremio.exec.work.protector.UserWorker;
+import com.dremio.flight.formation.FlightStoreCreator;
+import com.dremio.proto.flight.commands.Command;
+import com.dremio.sabot.rpc.user.UserSession;
+import com.dremio.service.users.SystemUser;
+import com.google.common.base.Joiner;
+import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Lists;
 import com.google.protobuf.InvalidProtocolBufferException;
 
@@ -78,12 +95,14 @@ import io.netty.buffer.ArrowBuf;
 import io.netty.buffer.ByteBufUtil;
 
 class Producer implements FlightProducer, AutoCloseable {
+  private static final Joiner JOINER = Joiner.on(":");
   private static final Logger logger = LoggerFactory.getLogger(Producer.class);
   private final Location location;
   private final Provider<UserWorker> worker;
   private final Provider<SabotContext> context;
   private final BufferAllocator allocator;
   private final AuthValidator validator;
+  private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
 
   Producer(Location location, Provider<UserWorker> worker, Provider<SabotContext> context, BufferAllocator allocator, AuthValidator validator) {
     super();
@@ -92,12 +111,42 @@ class Producer implements FlightProducer, AutoCloseable {
     this.context = context;
     this.allocator = allocator;
     this.validator = validator;
+    kvStore = context.get().getKVStoreProvider().getStore(FlightStoreCreator.class);
   }
 
   @Override
   public void doAction(CallContext context, Action action, StreamListener<Result> resultStreamListener) {
     throw Status.UNIMPLEMENTED.asRuntimeException();
   }
+
+  private FlightInfo getCoalesce(CallContext callContext, FlightDescriptor descriptor, Command cmd) {
+    PrepareParallel d = new PrepareParallel(kvStore);
+    logger.debug("coalescing query {}", new String(cmd.getTicket().toByteArray()));
+    RunQuery query;
+    try {
+      PreparedStatementHandle handle = PreparedStatementHandle.PARSER.parseFrom(cmd.getTicket().toByteArray());
+      query = RunQuery.newBuilder()
+        .setType(QueryType.PREPARED_STATEMENT)
+        .setPreparedStatementHandle(handle)
+        .build();
+    } catch (InvalidProtocolBufferException e) {
+      throw Status.UNKNOWN.withCause(e).asRuntimeException();
+    }
+
+    UserRequest request = new UserRequest(RpcType.RUN_QUERY, query);
+    UserBitShared.ExternalId externalId = submitWork(callContext, request, d);
+    String queryId = QueryIdHelper.getQueryId(ExternalIdHelper.toQueryId(externalId));
+    logger.debug("submitted query for {} and got query id {}. Will now wait for parallel planner to return.", new String(cmd.getTicket().toByteArray()), queryId);
+    return d.getInfo(descriptor, queryId);
+  }
+
+  private FlightInfo getInfoParallel(CallContext callContext, FlightDescriptor descriptor, String sql) {
+    FlightInfo schema = getInfoImpl(callContext, descriptor, sql);
+    sql = String.format("create table flight.money as (%s)", sql);
+    FlightInfo ticket = getInfoImpl(callContext, descriptor, sql);
+    return new FlightInfo(schema.getSchema(), schema.getDescriptor(), ticket.getEndpoints(), ticket.getBytes(), ticket.getRecords());
+  }
+
 
   private FlightInfo getInfo(CallContext callContext, FlightDescriptor descriptor, String sql) {
     logger.info("GetFlightInfo called for sql {}", sql);
@@ -205,6 +254,126 @@ class Producer implements FlightProducer, AutoCloseable {
       }
     }
 
+  }
+
+  private class PrepareParallel implements UserResponseHandler {
+
+    private final CompletableFuture<List<FlightEndpoint>> future = new CompletableFuture<>();
+    private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
+    private List<FlightEndpoint> endpoints;
+    private String queryId = "unknown";
+
+
+    public PrepareParallel(KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore) {
+      this.kvStore = kvStore;
+    }
+
+    public FlightInfo getInfo(FlightDescriptor descriptor, String queryId) {
+      this.queryId = queryId;
+      try {
+        List<FlightEndpoint> endpointsFromFuture = future.get();
+        logger.debug("got endpoints future back for queryid {} with {} endpoints", queryId, endpointsFromFuture.size());
+        endpoints = endpointsFromFuture.stream()
+          .map(e -> {
+            String ticketId = JOINER.join(queryId, new String(e.getTicket().getBytes()));
+            logger.debug("doing create action for ticket {}", ticketId);
+            Ticket ticket = new Ticket(ticketId.getBytes());
+            try(FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
+              c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
+              Iterator<Result> result = c.doAction(new Action("create", ticket.getBytes()));
+              result.forEachRemaining(r -> {
+                logger.debug("got action result {} for ticket {}", new String(r.getBody()), ticketId);
+              });
+            } catch (InterruptedException ex) {
+              logger.error("unable to complete create action for ticket " + ticketId, ex);
+            }
+            logger.debug("completed create action for ticket {}", ticketId);
+            return new FlightEndpoint(ticket, e.getLocations().toArray(new Location[0]));
+          }).collect(Collectors.toList());
+        FlightInfo info = new FlightInfo(new Schema(Lists.newArrayList()), descriptor, endpoints, -1L, -1L);
+        logger.debug("returning new flight info with a fake schema and {} data endpoints", endpoints.size());
+        return info;
+      } catch (ExecutionException e) {
+        throw Throwables.propagate(e.getCause());
+      } catch (InterruptedException e) {
+        throw Throwables.propagate(e);
+      }
+    }
+
+    @Override
+    public void sendData(RpcOutcomeListener<Ack> outcomeListener, QueryWritableBatch result) {
+      logger.debug("send data is called on parallel prepare for query id {}", queryId);
+      if (!future.isDone()) {
+        future.complete(ImmutableList.of());
+      }
+      outcomeListener.success(Acks.OK, null);
+    }
+
+    @Override
+    public void completed(UserResult result) {
+      logger.debug("running completed method for queryid {}. Will try and run delete action now.", queryId);
+      endpoints.forEach(e -> {
+        String ticketId = new String(e.getTicket().getBytes());
+        try(FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
+          logger.debug("running delete action for {}", ticketId);
+          c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
+          Iterator<Result> results = c.doAction(new Action("delete", e.getTicket().getBytes()));
+          results.forEachRemaining(r -> {
+            logger.debug("got action result {} for ticket {}", new String(r.getBody()), ticketId);
+          });
+        } catch (InterruptedException ex) {
+          logger.error("delete action failed for {}", ticketId);
+          throw new RuntimeException(ex);
+        }
+        logger.debug("successful run of delete action for {}", ticketId);
+      });
+      if (result.getState() == QueryState.FAILED) {
+        Status.UNKNOWN.withCause(result.getException()).asRuntimeException();
+      }
+    }
+
+    @Override
+    public void planParallelized(PlanningSet planningSet) {
+      logger.debug("plan parallel called, collecting endpoints");
+      final ImmutableList.Builder<FlightEndpoint> endpoints = ImmutableList.builder();
+      for (Wrapper wrapper: planningSet.getFragmentWrapperMap().values()) {
+        String majorId = String.valueOf(wrapper.getMajorFragmentId());
+        for (int i=0;i<wrapper.getAssignedEndpoints().size();i++) {
+          CoordinationProtos.NodeEndpoint endpoint = wrapper.getAssignedEndpoint(i);
+
+          String opName = null;
+          CoreOperatorType op = CoreOperatorType.valueOf(wrapper.getNode().getRoot().getOperatorType());
+          if (op == null) {
+            if (wrapper.getNode().getRoot() instanceof UnionExchange) {
+              opName = "UnionExchange";
+            } else {
+              logger.warn("unknown op type " + wrapper.getNode().getRoot());
+            }
+          } else {
+            opName = String.valueOf(op);
+          }
+          Ticket ticket = new Ticket(JOINER.join(
+            majorId,
+            String.valueOf(i),
+            opName,
+            endpoint.getAddress(),
+            endpoint.getUserPort()
+          ).getBytes());
+          FlightStoreCreator.NodeKey flightLocation = kvStore.get(FlightStoreCreator.NodeKey.fromNodeEndpoint(endpoint));
+          Location location = null;
+          if (flightLocation == null) {
+            int port = endpoint.getUserPort();
+            location = Location.forGrpcInsecure(endpoint.getAddress(), port-12104);
+          } else {
+            location = flightLocation.toLocation();
+          }
+          endpoints.add(new FlightEndpoint(ticket, location));
+        }
+      }
+      List<FlightEndpoint> builtEndpoints = endpoints.build();
+      logger.debug("built {} parallel endpoints", builtEndpoints.size());
+      future.complete(builtEndpoints);
+    }
   }
 
   private class RetrieveData implements UserResponseHandler {

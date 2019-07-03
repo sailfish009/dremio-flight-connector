@@ -16,6 +16,8 @@
 package com.dremio.flight;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -40,8 +42,14 @@ import org.slf4j.LoggerFactory;
 
 import com.dremio.BaseTestQuery;
 import com.dremio.exec.ExecTest;
+import com.dremio.exec.catalog.CatalogServiceImpl;
+import com.dremio.exec.store.CatalogService;
+import com.dremio.flight.formation.FormationConfig;
+import com.dremio.proto.flight.commands.Command;
 import com.dremio.service.InitializerRegistry;
+import com.dremio.service.namespace.source.proto.SourceConfig;
 import com.dremio.service.users.SystemUser;
+import com.typesafe.config.ConfigValueFactory;
 
 import io.protostuff.LinkedBuffer;
 
@@ -60,8 +68,17 @@ public class TestFlightEndpoint extends BaseTestQuery {
 
   @BeforeClass
   public static void init() throws Exception {
+    BaseTestQuery.updateTestCluster(4, config.withValue("dremio.test.query.printing.silent", ConfigValueFactory.fromAnyRef(false)));
     registry = new InitializerRegistry(ExecTest.CLASSPATH_SCAN_RESULT, getBindingProvider());
     registry.start();
+    SourceConfig c = new SourceConfig();
+    FormationConfig conf = new FormationConfig();
+    c.setConnectionConf(conf);
+    c.setName("flight");
+    c.setMetadataPolicy(CatalogService.NEVER_REFRESH_POLICY);
+    CatalogServiceImpl cserv = (CatalogServiceImpl) getBindingProvider().lookup(CatalogService.class);
+    cserv.createSourceIfMissingWithThrow(c);
+
   }
 
   @AfterClass
@@ -89,6 +106,61 @@ public class TestFlightEndpoint extends BaseTestQuery {
       Assert.assertTrue(total > 1);
       System.out.println(total);
     }
+  }
+
+  @Test
+  public void connectParallel() throws Exception {
+    logger.debug("starting!");
+    testNoResult("alter session set \"planner.slice_target\" = 10");
+    FlightClient c = FlightClient.builder().allocator(getAllocator()).location(Location.forGrpcInsecure("localhost", 47470)).build();
+    c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
+    String sql = "select * from sys.options";
+    logger.debug("sending get info message");
+    byte[] message = ProtostuffIOUtil.toByteArray(new Command(sql, true, false, ByteString.EMPTY), Command.getSchema(), buffer);
+    buffer.clear();
+    FlightInfo info = c.getInfo(FlightDescriptor.command(message));
+    logger.debug("received get info message");
+    message = ProtostuffIOUtil.toByteArray(new Command("", true, true, ByteString.copyFrom(info.getEndpoints().get(0).getTicket().getBytes())), Command.getSchema(), buffer);
+    buffer.clear();
+    logger.debug("sending coalesce message");
+    FlightInfo finalInfo = c.getInfo(FlightDescriptor.command(message));
+
+    AtomicInteger endpointCount = new AtomicInteger();
+    logger.debug("received coalesce message with {} endpoints", finalInfo.getEndpoints().size());
+    finalInfo.getEndpoints().forEach(e -> {
+      logger.debug("Endpoint {} of {}. Ticket is {}, uri is {}", endpointCount.incrementAndGet(), finalInfo.getEndpoints().size(), new String(e.getTicket().getBytes()), e.getLocations().get(0).getUri());
+    });
+    ExecutorService executorService = Executors.newFixedThreadPool(24);
+    CompletionService<Long> completionService =
+      new ExecutorCompletionService<>(executorService);
+    int remainingFutures = 0;
+    long total = 0;
+    long totalCount = 0;
+    for (FlightEndpoint e : finalInfo.getEndpoints()) {
+      int thisEndpoint = endpointsSubmitted.incrementAndGet();
+      logger.debug("submitting flight endpoint {} with ticket {} to {}", thisEndpoint, new String(e.getTicket().getBytes()), e.getLocations().get(0).getUri());
+      RunnableReader reader = new RunnableReader(allocator, e);
+      completionService.submit(reader);
+      logger.debug("submitted flight endpoint {} with ticket {} to {}", thisEndpoint, new String(e.getTicket().getBytes()), e.getLocations().get(0).getUri());
+      remainingFutures++;
+    }
+
+    while (remainingFutures > 0) {
+      Future<Long> completedFuture = completionService.take();
+      remainingFutures--;
+      Long l = completedFuture.get();
+//      Long l = reader.call();
+      total += l;
+      totalCount++;
+      logger.info("returned future {} of {} with value {}", endpointsReceived.incrementAndGet(), endpointsSubmitted.get(), l);
+      logger.error("total so far is {} after {} futures", total, totalCount);
+      logger.error("We are waiting on {} futures", remainingFutures);
+    }
+    long expected = 13460172;
+
+    c.close();
+
+    System.out.println(total + "  " + expected);
   }
 
   private static AtomicInteger endpointsSubmitted = new AtomicInteger();
