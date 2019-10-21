@@ -15,6 +15,10 @@
  */
 package com.dremio.flight.formation;
 
+import java.io.IOException;
+
+import org.apache.arrow.flight.Location;
+
 import com.dremio.datastore.KVStore;
 import com.dremio.datastore.Serializer;
 import com.dremio.datastore.StoreBuildingFactory;
@@ -23,11 +27,6 @@ import com.dremio.exec.proto.CoordinationProtos;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Objects;
-import com.google.protobuf.InvalidProtocolBufferException;
-import org.apache.arrow.flight.FlightEndpoint;
-import org.apache.arrow.flight.Location;
-
-import java.io.IOException;
 
 public final class
 FlightStoreCreator implements StoreCreationFunction<KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey>> {
@@ -122,6 +121,7 @@ FlightStoreCreator implements StoreCreationFunction<KVStore<FlightStoreCreator.N
 
   public static final class NodeKeySerializer extends Serializer<NodeKey> {
     private static final ObjectMapper mapper = new ObjectMapper();
+
     @Override
     public String toJson(NodeKey v) throws IOException {
       return mapper.writeValueAsString(v);

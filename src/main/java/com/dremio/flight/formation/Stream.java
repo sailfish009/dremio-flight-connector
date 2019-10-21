@@ -21,25 +21,23 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.google.common.collect.ImmutableList;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightProducer.ServerStreamListener;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.util.AutoCloseables;
 import org.apache.arrow.vector.VectorLoader;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.types.pojo.Schema;
-
-import com.google.common.base.Throwables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.collect.ImmutableList;
 
 public class Stream {
   private static final Logger logger = LoggerFactory.getLogger(Stream.class);
   private final Consumer consumer;
   private final Producer producer;
-  private final BlockingQueue<ArrowRecordBatch> exchanger = new ArrayBlockingQueue<>(1024*1024);
+  private final BlockingQueue<ArrowRecordBatch> exchanger = new ArrayBlockingQueue<>(1024 * 1024);
   private FlightDescriptor descriptor;
 
   public Stream(BufferAllocator allocator, FlightDescriptor descriptor) {
@@ -75,7 +73,8 @@ public class Stream {
     private final BlockingQueue<ArrowRecordBatch> exchanger;
 
     public Producer(BufferAllocator allocator, FlightDescriptor descriptor, BlockingQueue<ArrowRecordBatch> exchanger) {
-      this.allocator = allocator.newChildAllocator("producer", 0, Long.MAX_VALUE);;
+      this.allocator = allocator.newChildAllocator("producer", 0, Long.MAX_VALUE);
+      ;
       this.descriptor = descriptor;
       this.exchanger = exchanger;
     }
@@ -110,7 +109,7 @@ public class Stream {
     }
   }
 
-  public static class Consumer implements AutoCloseable{
+  public static class Consumer implements AutoCloseable {
 
     private AtomicBoolean isDone = new AtomicBoolean(false);
     private BufferAllocator allocator;

@@ -41,14 +41,14 @@ public class FormationWriter extends AbstractWriter {
 
   @JsonCreator
   public FormationWriter(
-      @JsonProperty("child") PhysicalOperator child,
-      @JsonProperty("props") OpProps props,
-      @JsonProperty("location") String location,
-      @JsonProperty("options") WriterOptions options,
-      @JsonProperty("sortColumns") List<String> sortColumns,
-      @JsonProperty("pluginId") StoragePluginId pluginId,
-      @JacksonInject CatalogService catalogService
-      ) throws IOException, ExecutionSetupException {
+    @JsonProperty("child") PhysicalOperator child,
+    @JsonProperty("props") OpProps props,
+    @JsonProperty("location") String location,
+    @JsonProperty("options") WriterOptions options,
+    @JsonProperty("sortColumns") List<String> sortColumns,
+    @JsonProperty("pluginId") StoragePluginId pluginId,
+    @JacksonInject CatalogService catalogService
+  ) throws IOException, ExecutionSetupException {
     super(props, child, options);
     //CatalogService catalogService = null;
     this.plugin = catalogService.getSource(pluginId);

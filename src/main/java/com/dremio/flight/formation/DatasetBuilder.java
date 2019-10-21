@@ -20,14 +20,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import arrow.flight.com.google.protobuf.ByteString;
-import com.dremio.connector.metadata.BytesOutput;
-import com.dremio.connector.metadata.DatasetHandle;
-import com.dremio.connector.metadata.DatasetSplit;
-import com.dremio.connector.metadata.DatasetSplitAffinity;
-import com.dremio.connector.metadata.EntityPath;
-import com.dremio.connector.metadata.PartitionChunk;
-import com.google.common.collect.Lists;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightEndpoint;
@@ -36,10 +28,14 @@ import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.impl.Flight;
 import org.apache.arrow.vector.types.pojo.Schema;
 
+import com.dremio.connector.metadata.DatasetHandle;
+import com.dremio.connector.metadata.DatasetSplit;
+import com.dremio.connector.metadata.DatasetSplitAffinity;
+import com.dremio.connector.metadata.EntityPath;
+import com.dremio.connector.metadata.PartitionChunk;
 import com.dremio.exec.planner.cost.ScanCostFactor;
 import com.dremio.exec.record.BatchSchema;
 import com.dremio.service.namespace.DatasetHelper;
-import com.dremio.service.namespace.NamespaceKey;
 import com.dremio.service.namespace.dataset.proto.DatasetConfig;
 import com.dremio.service.namespace.dataset.proto.DatasetType;
 import com.dremio.service.namespace.dataset.proto.PhysicalDataset;
@@ -49,6 +45,9 @@ import com.dremio.service.namespace.proto.EntityId;
 import com.dremio.service.users.SystemUser;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+
+import arrow.flight.com.google.protobuf.ByteString;
 
 public class DatasetBuilder implements DatasetHandle {
 
@@ -74,55 +73,55 @@ public class DatasetBuilder implements DatasetHandle {
   }
 
   private void buildIfNecessary() {
-    if(config != null) {
+    if (config != null) {
       return;
     }
 
-    if(infos == null) {
+    if (infos == null) {
       infos = clients.stream()
-          .map(c -> c.getInfo(FlightDescriptor.path(key.getName())))
-          .collect(Collectors.toList());
+        .map(c -> c.getInfo(FlightDescriptor.path(key.getName())))
+        .collect(Collectors.toList());
     }
 
     Preconditions.checkArgument(!infos.isEmpty());
     Schema schema = null;
     long records = 0;
     List<FlightEndpoint> endpoints = new ArrayList<>();
-    for(FlightInfo info : infos) {
+    for (FlightInfo info : infos) {
       schema = info.getSchema();
       records += info.getRecords();
       endpoints.addAll(info.getEndpoints());
     }
 
-     config = new DatasetConfig()
-         .setFullPathList(key.getComponents())
-         .setName(key.getName())
-         .setType(DatasetType.PHYSICAL_DATASET)
-         .setId(new EntityId().setId(UUID.randomUUID().toString()))
-         .setReadDefinition(new ReadDefinition()
-             .setScanStats(new ScanStats().setRecordCount(records)
-             .setScanFactor(ScanCostFactor.PARQUET.getFactor())))
-         .setOwner(SystemUser.SYSTEM_USERNAME)
-         .setPhysicalDataset(new PhysicalDataset())
-         .setRecordSchema(new BatchSchema(schema.getFields()).toByteString())
-         .setSchemaVersion(DatasetHelper.CURRENT_VERSION);
+    config = new DatasetConfig()
+      .setFullPathList(key.getComponents())
+      .setName(key.getName())
+      .setType(DatasetType.PHYSICAL_DATASET)
+      .setId(new EntityId().setId(UUID.randomUUID().toString()))
+      .setReadDefinition(new ReadDefinition()
+        .setScanStats(new ScanStats().setRecordCount(records)
+          .setScanFactor(ScanCostFactor.PARQUET.getFactor())))
+      .setOwner(SystemUser.SYSTEM_USERNAME)
+      .setPhysicalDataset(new PhysicalDataset())
+      .setRecordSchema(new BatchSchema(schema.getFields()).toByteString())
+      .setSchemaVersion(DatasetHelper.CURRENT_VERSION);
 
-     splits = new ArrayList<>();
-     List<DatasetSplit> dSplits = Lists.newArrayList();
+    splits = new ArrayList<>();
+    List<DatasetSplit> dSplits = Lists.newArrayList();
 //     int i =0;
-     for(FlightEndpoint ep : endpoints) {
+    for (FlightEndpoint ep : endpoints) {
 
-       List<Location> locations = ep.getLocations();
-       if (locations.size() > 1) {
-         throw new UnsupportedOperationException("I dont know what more than one location means, not handling it");
-       }
-       DatasetSplitAffinity a = DatasetSplitAffinity.of(locations.get(0).getUri().getHost(), 100d);
+      List<Location> locations = ep.getLocations();
+      if (locations.size() > 1) {
+        throw new UnsupportedOperationException("I dont know what more than one location means, not handling it");
+      }
+      DatasetSplitAffinity a = DatasetSplitAffinity.of(locations.get(0).getUri().getHost(), 100d);
 
 //       split.setSplitKey(Integer.toString(i));
-       Flight.Ticket ticket = Flight.Ticket.newBuilder().setTicket(ByteString.copyFrom(ep.getTicket().getBytes())).build();
-       dSplits.add(DatasetSplit.of(ImmutableList.of(a), records/endpoints.size(), records, ticket::writeTo));
-     }
-     splits.add(PartitionChunk.of(dSplits));
+      Flight.Ticket ticket = Flight.Ticket.newBuilder().setTicket(ByteString.copyFrom(ep.getTicket().getBytes())).build();
+      dSplits.add(DatasetSplit.of(ImmutableList.of(a), records / endpoints.size(), records, ticket::writeTo));
+    }
+    splits.add(PartitionChunk.of(dSplits));
   }
 
   @Override

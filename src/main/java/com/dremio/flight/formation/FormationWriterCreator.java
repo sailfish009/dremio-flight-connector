@@ -20,7 +20,7 @@ import com.dremio.sabot.exec.context.OperatorContext;
 import com.dremio.sabot.op.spi.SingleInputOperator;
 import com.dremio.sabot.op.writer.WriterOperator;
 
-public class FormationWriterCreator implements SingleInputOperator.Creator<FormationWriter>{
+public class FormationWriterCreator implements SingleInputOperator.Creator<FormationWriter> {
   static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FormationWriterCreator.class);
 
   @Override

@@ -18,20 +18,20 @@ package com.dremio.flight.formation;
 import java.io.IOException;
 import java.util.stream.Collectors;
 
-import com.dremio.common.utils.protos.QueryIdHelper;
-import com.dremio.exec.proto.ExecProtos;
 import org.apache.arrow.flight.FlightDescriptor;
-import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.VectorUnloader;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import com.dremio.common.utils.protos.QueryIdHelper;
+import com.dremio.exec.proto.ExecProtos;
 import com.dremio.exec.record.VectorAccessible;
 import com.dremio.exec.store.RecordWriter;
 import com.dremio.exec.store.WritePartition;
 import com.google.common.collect.ImmutableList;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class FormationRecordWriter implements RecordWriter {
   private static final Logger logger = LoggerFactory.getLogger(FormationRecordWriter.class);
@@ -54,7 +54,7 @@ public class FormationRecordWriter implements RecordWriter {
 
   @Override
   public void close() throws Exception {
-    if(creator != null) {
+    if (creator != null) {
       creator.close();
     }
   }
@@ -63,9 +63,9 @@ public class FormationRecordWriter implements RecordWriter {
   @Override
   public void setup(VectorAccessible incoming, OutputEntryListener listener, WriteStatsListener statsListener) throws IOException {
     root = new VectorSchemaRoot(ImmutableList.copyOf(incoming)
-        .stream()
-        .map(vw -> ((FieldVector)vw.getValueVector()))
-        .collect(Collectors.toList()));
+      .stream()
+      .map(vw -> ((FieldVector) vw.getValueVector()))
+      .collect(Collectors.toList()));
     unloader = new VectorUnloader(root);
     creator = store.putStream(
       descriptor, root.getSchema());
@@ -79,7 +79,7 @@ public class FormationRecordWriter implements RecordWriter {
   @Override
   public int writeBatch(int offset, int length) throws IOException {
     root.setRowCount(length);
-    try(ArrowRecordBatch arb = unloader.getRecordBatch()){
+    try (ArrowRecordBatch arb = unloader.getRecordBatch()) {
       int size = arb.computeBodyLength();
       creator.add(arb);
       return size;
@@ -92,7 +92,6 @@ public class FormationRecordWriter implements RecordWriter {
   public void abort() throws IOException {
     creator.abort();
   }
-
 
 
 }

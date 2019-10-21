@@ -24,29 +24,11 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 import javax.inject.Provider;
 
-import com.dremio.connector.ConnectorException;
-import com.dremio.connector.metadata.DatasetHandle;
-import com.dremio.connector.metadata.DatasetMetadata;
-import com.dremio.connector.metadata.EntityPath;
-import com.dremio.connector.metadata.GetDatasetOption;
-import com.dremio.connector.metadata.GetMetadataOption;
-import com.dremio.connector.metadata.ListPartitionChunkOption;
-import com.dremio.connector.metadata.PartitionChunkListing;
-import com.dremio.datastore.KVStore;
-import com.dremio.exec.catalog.MutablePlugin;
-import com.dremio.exec.dotfile.View;
-import com.dremio.exec.physical.base.OpProps;
-import com.dremio.exec.store.DatasetRetrievalOptions;
-import com.dremio.exec.store.StoragePlugin;
-import com.dremio.flight.AuthValidator;
-import com.google.common.collect.Maps;
 import org.apache.arrow.flight.Action;
 import org.apache.arrow.flight.ActionType;
 import org.apache.arrow.flight.Criteria;
@@ -57,15 +39,29 @@ import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.Location;
+import org.apache.arrow.flight.PutResult;
 import org.apache.arrow.flight.Result;
 import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.flight.auth.BasicServerAuthHandler;
 import org.apache.arrow.flight.impl.Flight;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.types.pojo.Schema;
 
 import com.dremio.common.AutoCloseables;
 import com.dremio.common.exceptions.UserException;
+import com.dremio.connector.ConnectorException;
+import com.dremio.connector.metadata.DatasetHandle;
+import com.dremio.connector.metadata.DatasetMetadata;
+import com.dremio.connector.metadata.EntityPath;
+import com.dremio.connector.metadata.GetDatasetOption;
+import com.dremio.connector.metadata.GetMetadataOption;
+import com.dremio.connector.metadata.ListPartitionChunkOption;
+import com.dremio.connector.metadata.PartitionChunkListing;
+import com.dremio.datastore.KVStore;
+import com.dremio.exec.catalog.MutablePlugin;
 import com.dremio.exec.catalog.StoragePluginId;
+import com.dremio.exec.dotfile.View;
+import com.dremio.exec.physical.base.OpProps;
 import com.dremio.exec.physical.base.PhysicalOperator;
 import com.dremio.exec.physical.base.Writer;
 import com.dremio.exec.physical.base.WriterOptions;
@@ -74,8 +70,10 @@ import com.dremio.exec.planner.logical.ViewTable;
 import com.dremio.exec.proto.CoordinationProtos.NodeEndpoint;
 import com.dremio.exec.server.SabotContext;
 import com.dremio.exec.store.SchemaConfig;
+import com.dremio.exec.store.StoragePlugin;
 import com.dremio.exec.store.StoragePluginRulesFactory;
 import com.dremio.exec.store.dfs.GenericCreateTableEntry;
+import com.dremio.flight.AuthValidator;
 import com.dremio.service.coordinator.ClusterCoordinator.Role;
 import com.dremio.service.coordinator.NodeStatusListener;
 import com.dremio.service.namespace.NamespaceKey;
@@ -84,10 +82,7 @@ import com.dremio.service.namespace.capabilities.SourceCapabilities;
 import com.dremio.service.namespace.dataset.proto.DatasetConfig;
 import com.dremio.service.users.SystemUser;
 import com.google.common.collect.ImmutableList;
-
-import io.protostuff.ByteString;
-import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.zookeeper.OpResult;
+import com.google.common.collect.Maps;
 
 public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FormationPlugin.class);
@@ -101,7 +96,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private volatile List<FlightClient> clients = new ArrayList<>();
   private final Provider<StoragePluginId> pluginIdProvider;
   private final FormationFlightProducer producer;
-  private final AuthValidator validator = new AuthValidator();
+  private final AuthValidator validator = new AuthValidator(null, null);
 
   public FormationPlugin(SabotContext context, String name, Provider<StoragePluginId> pluginIdProvider) {
     this.context = context;
@@ -140,7 +135,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
 
   @Override
   public Optional<DatasetHandle> getDatasetHandle(EntityPath datasetPath, GetDatasetOption... options) throws ConnectorException {
-    if(datasetPath.size() != 2) {
+    if (datasetPath.size() != 2) {
       return Optional.empty();
     }
     try {
@@ -164,14 +159,17 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   public boolean containerExists(EntityPath containerPath) {
     return true;
   }
+
   @Override
   public boolean hasAccessPermission(String user, NamespaceKey key, DatasetConfig datasetConfig) {
     return true;
   }
+
   @Override
   public SourceState getState() {
     return SourceState.GOOD;
   }
+
   @Override
   public SourceCapabilities getSourceCapabilities() {
     return SourceCapabilities.NONE;
@@ -181,6 +179,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   public ViewTable getView(List<String> tableSchemaPath, SchemaConfig schemaConfig) {
     return null;
   }
+
   @Override
   public Class<? extends StoragePluginRulesFactory> getRulesFactoryClass() {
     return FormationRulesFactory.class;
@@ -208,9 +207,9 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private synchronized void refreshClients() {
     List<FlightClient> oldClients = clients;
     clients = context.getExecutors().stream()
-        .map(e -> FlightClient.builder().allocator(allocator).location(Location.forGrpcInsecure(e.getAddress(), FLIGHT_PORT)).build()).collect(Collectors.toList());
+      .map(e -> FlightClient.builder().allocator(allocator).location(Location.forGrpcInsecure(e.getAddress(), FLIGHT_PORT)).build()).collect(Collectors.toList());
     try {
-    AutoCloseables.close(oldClients);
+      AutoCloseables.close(oldClients);
     } catch (Exception ex) {
       logger.error("Failure while refreshing clients.", ex);
     }
@@ -224,7 +223,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
 
   @Override
   public CreateTableEntry createNewTable(SchemaConfig schemaConfig, NamespaceKey key, WriterOptions writerOptions, Map<String, Object> storageOptions) {
-    if(key.size() != 2) {
+    if (key.size() != 2) {
       throw UserException.unsupportedError().message("Formation plugin currently only supports single part names.").build(logger);
     }
     return new GenericCreateTableEntry(SystemUser.SYSTEM_USERNAME, this, key.getLeaf(), writerOptions);
@@ -265,7 +264,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
     private final Location port;
     private final ConcurrentMap<FlightDescriptor, Stream> holders = new ConcurrentHashMap<>();
     private final BufferAllocator allocator;
-//    private final ExecutorService executor = Executors.newFixedThreadPool(5);
+    //    private final ExecutorService executor = Executors.newFixedThreadPool(5);
     private Map<Ticket, Future<?>> futures = Maps.newHashMap();
 
     public FormationFlightProducer(Location port, BufferAllocator allocator) {
@@ -305,7 +304,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
     }
 
     @Override
-    public Callable<Flight.PutResult> acceptPut(CallContext callContext, FlightStream flightStream) {
+    public Runnable acceptPut(CallContext callContext, FlightStream flightStream, StreamListener<PutResult> streamListener) {
       logger.debug("put called, doing nothing");
       return null;
     }

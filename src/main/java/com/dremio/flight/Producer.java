@@ -80,13 +80,10 @@ import com.dremio.exec.work.protector.UserResponseHandler;
 import com.dremio.exec.work.protector.UserResult;
 import com.dremio.exec.work.protector.UserWorker;
 import com.dremio.flight.formation.FlightStoreCreator;
-import com.dremio.proto.flight.commands.Command;
-import com.dremio.sabot.rpc.user.UserSession;
 import com.dremio.service.users.SystemUser;
 import com.google.common.base.Joiner;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Lists;
 import com.google.protobuf.InvalidProtocolBufferException;
 

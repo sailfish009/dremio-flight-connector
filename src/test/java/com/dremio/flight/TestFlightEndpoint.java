@@ -45,7 +45,6 @@ import com.dremio.exec.ExecTest;
 import com.dremio.exec.catalog.CatalogServiceImpl;
 import com.dremio.exec.store.CatalogService;
 import com.dremio.flight.formation.FormationConfig;
-import com.dremio.proto.flight.commands.Command;
 import com.dremio.service.InitializerRegistry;
 import com.dremio.service.namespace.source.proto.SourceConfig;
 import com.dremio.service.users.SystemUser;
