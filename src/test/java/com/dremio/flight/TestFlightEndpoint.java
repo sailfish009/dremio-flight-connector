@@ -15,6 +15,7 @@
  */
 package com.dremio.flight;
 
+import java.util.Iterator;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutorCompletionService;
@@ -23,12 +24,15 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.arrow.flight.Action;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.Location;
+import org.apache.arrow.flight.Result;
+import org.apache.arrow.flight.SchemaResult;
 import org.apache.arrow.flight.auth.BasicClientAuthHandler;
 import org.apache.arrow.memory.BufferAllocator;
 import org.junit.AfterClass;
@@ -113,17 +117,16 @@ public class TestFlightEndpoint extends BaseTestQuery {
     testNoResult("alter session set \"planner.slice_target\" = 10");
     FlightClient c = FlightClient.builder().allocator(getAllocator()).location(Location.forGrpcInsecure("localhost", 47470)).build();
     c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
+    logger.debug("sending action message");
+    Iterator<Result> action = c.doAction(new Action("PARALLEL"));
+    action.forEachRemaining(r -> System.out.println(r.toString()));
+    logger.debug("received action message");
     String sql = "select * from sys.options";
-    logger.debug("sending get info message");
-    byte[] message = ProtostuffIOUtil.toByteArray(new Command(sql, true, false, ByteString.EMPTY), Command.getSchema(), buffer);
-    buffer.clear();
-    FlightInfo info = c.getInfo(FlightDescriptor.command(message));
-    logger.debug("received get info message");
-    message = ProtostuffIOUtil.toByteArray(new Command("", true, true, ByteString.copyFrom(info.getEndpoints().get(0).getTicket().getBytes())), Command.getSchema(), buffer);
-    buffer.clear();
+    logger.debug("sending get schema message");
+    SchemaResult schemaResult = c.getSchema(FlightDescriptor.command(sql.getBytes()));
+    logger.debug("received get schema message");
     logger.debug("sending coalesce message");
-    FlightInfo finalInfo = c.getInfo(FlightDescriptor.command(message));
-
+    FlightInfo finalInfo = c.getInfo(FlightDescriptor.command(sql.getBytes()));
     AtomicInteger endpointCount = new AtomicInteger();
     logger.debug("received coalesce message with {} endpoints", finalInfo.getEndpoints().size());
     finalInfo.getEndpoints().forEach(e -> {

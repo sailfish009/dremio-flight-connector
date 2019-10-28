@@ -18,6 +18,7 @@ package com.dremio.flight;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -35,6 +36,7 @@ import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.Result;
+import org.apache.arrow.flight.SchemaResult;
 import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.FieldVector;
@@ -82,7 +84,6 @@ import com.dremio.exec.work.protector.UserWorker;
 import com.dremio.flight.formation.FlightStoreCreator;
 import com.dremio.service.users.SystemUser;
 import com.google.common.base.Joiner;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -113,15 +114,29 @@ class Producer implements FlightProducer, AutoCloseable {
 
   @Override
   public void doAction(CallContext context, Action action, StreamListener<Result> resultStreamListener) {
+    if (action.getType().equals("PARALLEL")) {
+      AuthValidator.FlightSessionOptions options = validator.getSessionOptions(context);
+      options.setParallel(true);
+      resultStreamListener.onNext(new Result("ok".getBytes()));
+      resultStreamListener.onCompleted();
+      return;
+    }
+    if (action.getType().equals("NO_PARALLEL")) {
+      AuthValidator.FlightSessionOptions options = validator.getSessionOptions(context);
+      options.setParallel(false);
+      resultStreamListener.onNext(new Result("ok".getBytes()));
+      resultStreamListener.onCompleted();
+      return;
+    }
     throw Status.UNIMPLEMENTED.asRuntimeException();
   }
 
-  private FlightInfo getCoalesce(CallContext callContext, FlightDescriptor descriptor, Command cmd) {
+  private FlightInfo getCoalesce(CallContext callContext, FlightDescriptor descriptor, Ticket cmd) {
     PrepareParallel d = new PrepareParallel(kvStore);
-    logger.debug("coalescing query {}", new String(cmd.getTicket().toByteArray()));
+    logger.debug("coalescing query {}", new String(cmd.getBytes()));
     RunQuery query;
     try {
-      PreparedStatementHandle handle = PreparedStatementHandle.PARSER.parseFrom(cmd.getTicket().toByteArray());
+      PreparedStatementHandle handle = PreparedStatementHandle.PARSER.parseFrom(cmd.getBytes());
       query = RunQuery.newBuilder()
         .setType(QueryType.PREPARED_STATEMENT)
         .setPreparedStatementHandle(handle)
@@ -133,21 +148,15 @@ class Producer implements FlightProducer, AutoCloseable {
     UserRequest request = new UserRequest(RpcType.RUN_QUERY, query);
     UserBitShared.ExternalId externalId = submitWork(callContext, request, d);
     String queryId = QueryIdHelper.getQueryId(ExternalIdHelper.toQueryId(externalId));
-    logger.debug("submitted query for {} and got query id {}. Will now wait for parallel planner to return.", new String(cmd.getTicket().toByteArray()), queryId);
+    logger.debug("submitted query for {} and got query id {}. Will now wait for parallel planner to return.", new String(cmd.getBytes()), queryId);
     return d.getInfo(descriptor, queryId);
   }
 
   private FlightInfo getInfoParallel(CallContext callContext, FlightDescriptor descriptor, String sql) {
-    FlightInfo schema = getInfoImpl(callContext, descriptor, sql);
-    sql = String.format("create table flight.money as (%s)", sql);
+    sql = String.format("create table flight.\"%s\" as (%s)", "money", sql);
+    logger.debug("Submitting ctas {}", sql);
     FlightInfo ticket = getInfoImpl(callContext, descriptor, sql);
-    return new FlightInfo(schema.getSchema(), schema.getDescriptor(), ticket.getEndpoints(), ticket.getBytes(), ticket.getRecords());
-  }
-
-
-  private FlightInfo getInfo(CallContext callContext, FlightDescriptor descriptor, String sql) {
-    logger.info("GetFlightInfo called for sql {}", sql);
-    return getInfoImpl(callContext, descriptor, sql);
+    return getCoalesce(callContext, descriptor, ticket.getEndpoints().get(0).getTicket());
   }
 
 
@@ -164,14 +173,25 @@ class Producer implements FlightProducer, AutoCloseable {
       UserBitShared.ExternalId externalId = submitWork(callContext, request, prepare);
       return prepare.getInfo(descriptor, externalId);
     } catch (Exception e) {
-      e.printStackTrace();
-      throw new RuntimeException(e);
+      throw Status.ABORTED.asRuntimeException();
     }
   }
 
   @Override
+  public SchemaResult getSchema(CallContext context, FlightDescriptor descriptor) {
+    FlightInfo info = getInfoImpl(context, descriptor, new String(descriptor.getCommand()));
+    return new SchemaResult(info.getSchema());
+  }
+
+  @Override
   public FlightInfo getFlightInfo(CallContext callContext, FlightDescriptor descriptor) {
-    return getInfo(callContext, descriptor, new String(descriptor.getCommand()));
+    logger.debug("checking if parallel query");
+    boolean isParallel = validator.getSessionOptions(callContext).isParallel();
+    logger.debug("checking if parallel query: result {}", isParallel);
+    if (isParallel) {
+      return getInfoParallel(callContext, descriptor, new String(descriptor.getCommand()));
+    }
+    return getInfoImpl(callContext, descriptor, new String(descriptor.getCommand()));
   }
 
   @Override
@@ -275,7 +295,7 @@ class Producer implements FlightProducer, AutoCloseable {
             String ticketId = JOINER.join(queryId, new String(e.getTicket().getBytes()));
             logger.debug("doing create action for ticket {}", ticketId);
             Ticket ticket = new Ticket(ticketId.getBytes());
-            try(FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
+            try (FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
               c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
               Iterator<Result> result = c.doAction(new Action("create", ticket.getBytes()));
               result.forEachRemaining(r -> {
@@ -290,10 +310,8 @@ class Producer implements FlightProducer, AutoCloseable {
         FlightInfo info = new FlightInfo(new Schema(Lists.newArrayList()), descriptor, endpoints, -1L, -1L);
         logger.debug("returning new flight info with a fake schema and {} data endpoints", endpoints.size());
         return info;
-      } catch (ExecutionException e) {
-        throw Throwables.propagate(e.getCause());
-      } catch (InterruptedException e) {
-        throw Throwables.propagate(e);
+      } catch (InterruptedException | ExecutionException e) {
+        throw Status.INTERNAL.asRuntimeException();
       }
     }
 
@@ -311,7 +329,7 @@ class Producer implements FlightProducer, AutoCloseable {
       logger.debug("running completed method for queryid {}. Will try and run delete action now.", queryId);
       endpoints.forEach(e -> {
         String ticketId = new String(e.getTicket().getBytes());
-        try(FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
+        try (FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
           logger.debug("running delete action for {}", ticketId);
           c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
           Iterator<Result> results = c.doAction(new Action("delete", e.getTicket().getBytes()));
@@ -325,7 +343,7 @@ class Producer implements FlightProducer, AutoCloseable {
         logger.debug("successful run of delete action for {}", ticketId);
       });
       if (result.getState() == QueryState.FAILED) {
-        Status.UNKNOWN.withCause(result.getException()).asRuntimeException();
+        Status.ABORTED.withCause(result.getException()).asRuntimeException();
       }
     }
 
@@ -333,9 +351,9 @@ class Producer implements FlightProducer, AutoCloseable {
     public void planParallelized(PlanningSet planningSet) {
       logger.debug("plan parallel called, collecting endpoints");
       final ImmutableList.Builder<FlightEndpoint> endpoints = ImmutableList.builder();
-      for (Wrapper wrapper: planningSet.getFragmentWrapperMap().values()) {
+      for (Wrapper wrapper : planningSet.getFragmentWrapperMap().values()) {
         String majorId = String.valueOf(wrapper.getMajorFragmentId());
-        for (int i=0;i<wrapper.getAssignedEndpoints().size();i++) {
+        for (int i = 0; i < wrapper.getAssignedEndpoints().size(); i++) {
           CoordinationProtos.NodeEndpoint endpoint = wrapper.getAssignedEndpoint(i);
 
           String opName = null;
@@ -360,7 +378,7 @@ class Producer implements FlightProducer, AutoCloseable {
           Location location = null;
           if (flightLocation == null) {
             int port = endpoint.getUserPort();
-            location = Location.forGrpcInsecure(endpoint.getAddress(), port-12104);
+            location = Location.forGrpcInsecure(endpoint.getAddress(), port - 12104);
           } else {
             location = flightLocation.toLocation();
           }

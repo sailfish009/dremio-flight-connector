@@ -16,10 +16,13 @@
 package com.dremio.flight;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringWriter;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
@@ -121,7 +124,18 @@ public class TestSslFlightEndpoint extends BaseTestQuery {
       // as we want to use that certificate
       certs.add(trustStore.getCertificate(alias));
     }
+    toFile(certs);
     return certsToStream(certs);
+  }
+
+  private static void toFile(List<Certificate> certificates) throws IOException {
+    File root = tempFolder.getRoot();
+    Path certFile = Paths.get(root.getAbsolutePath(), "certs.pem");
+    JcaPEMWriter writer = new JcaPEMWriter(new FileWriter(certFile.toFile()));
+    for (final Certificate c : certificates) {
+      writer.writeObject(c);
+    }
+    writer.close();
   }
 
   private static InputStream certsToStream(List<Certificate> certs) throws IOException {
@@ -153,7 +167,9 @@ public class TestSslFlightEndpoint extends BaseTestQuery {
 
   @Test
   public void connect() throws Exception {
+    certs();
     Location location = Location.forGrpcTls("localhost", 47470);
+    Thread.sleep(Long.MAX_VALUE);
     try (FlightClient c = flightClient(getAllocator(), location)) {
       c.authenticate(new BasicClientAuthHandler(SystemUser.SYSTEM_USERNAME, null));
       String sql = "select * from sys.options";

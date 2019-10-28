@@ -86,7 +86,7 @@ public class FlightInitializer implements Initializer<Void>, AutoCloseable {
       location = Location.forGrpcTls(host, port);
       serverBuilder.useTls(pair.getRight(), pair.getLeft()).location(location);
     } catch (Exception e) {
-      location = Location.forGrpcInsecure(host, port);
+      location = Location.forGrpcInsecure("0.0.0.0", port);
       serverBuilder.location(location);
     }
     producer = new Producer(

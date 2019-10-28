@@ -84,6 +84,8 @@ import com.dremio.service.users.SystemUser;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
 
+import io.grpc.Status;
+
 public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FormationPlugin.class);
 
@@ -96,13 +98,14 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private volatile List<FlightClient> clients = new ArrayList<>();
   private final Provider<StoragePluginId> pluginIdProvider;
   private final FormationFlightProducer producer;
-  private final AuthValidator validator = new AuthValidator(null, null);
+  private final AuthValidator validator;
 
   public FormationPlugin(SabotContext context, String name, Provider<StoragePluginId> pluginIdProvider) {
     this.context = context;
     this.allocator = context.getAllocator().newChildAllocator("formation-" + name, 0, Long.MAX_VALUE);
     this.thisLocation = Location.forGrpcInsecure(context.getEndpoint().getAddress(), context.getEndpoint().getUserPort() - FLIGHT_PORT);
     this.producer = new FormationFlightProducer(thisLocation, allocator);
+    this.validator = new AuthValidator(null, context);
     this.server = FlightServer.builder().allocator(this.allocator).location(thisLocation).producer(producer).authHandler(new BasicServerAuthHandler(validator)).build();
     this.pluginIdProvider = pluginIdProvider;
     kvStore = context.getKVStoreProvider().getStore(FlightStoreCreator.class); //todo is this the right way to share state between executors?
@@ -294,19 +297,17 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
 
     @Override
     public void listFlights(CallContext callContext, Criteria criteria, StreamListener<FlightInfo> streamListener) {
-      logger.debug("list flights called, doing nothing");
+      throw Status.UNIMPLEMENTED.asRuntimeException();
     }
 
     @Override
     public FlightInfo getFlightInfo(CallContext callContext, FlightDescriptor flightDescriptor) {
-      logger.debug("get flight info called, doing nothing");
-      return null;
+      throw Status.UNIMPLEMENTED.asRuntimeException();
     }
 
     @Override
     public Runnable acceptPut(CallContext callContext, FlightStream flightStream, StreamListener<PutResult> streamListener) {
-      logger.debug("put called, doing nothing");
-      return null;
+      throw Status.UNIMPLEMENTED.asRuntimeException();
     }
 
     @Override
@@ -346,7 +347,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
 
     @Override
     public void listActions(CallContext callContext, StreamListener<ActionType> streamListener) {
-      logger.debug("list actions is not implemented, doing nothing");
+      throw Status.UNIMPLEMENTED.asRuntimeException();
     }
 
     public Stream.Producer putStream(FlightDescriptor descriptor, Schema schema) {
