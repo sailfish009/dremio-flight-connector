@@ -46,9 +46,11 @@ import org.apache.arrow.flight.auth.BasicServerAuthHandler;
 import org.apache.arrow.flight.impl.Flight;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.commons.lang3.tuple.Pair;
 
 import com.dremio.common.AutoCloseables;
 import com.dremio.common.exceptions.UserException;
+import com.dremio.config.DremioConfig;
 import com.dremio.connector.ConnectorException;
 import com.dremio.connector.metadata.DatasetHandle;
 import com.dremio.connector.metadata.DatasetMetadata;
@@ -74,6 +76,8 @@ import com.dremio.exec.store.StoragePlugin;
 import com.dremio.exec.store.StoragePluginRulesFactory;
 import com.dremio.exec.store.dfs.GenericCreateTableEntry;
 import com.dremio.flight.AuthValidator;
+import com.dremio.flight.PropertyHelper;
+import com.dremio.flight.SslHelper;
 import com.dremio.service.coordinator.ClusterCoordinator.Role;
 import com.dremio.service.coordinator.NodeStatusListener;
 import com.dremio.service.namespace.NamespaceKey;
@@ -89,7 +93,7 @@ import io.grpc.Status;
 public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FormationPlugin.class);
 
-  private static int FLIGHT_PORT = 12104;
+  public static final int FLIGHT_PORT = 47471;
   private final Location thisLocation;
   private final BufferAllocator allocator;
   private final SabotContext context;
@@ -100,15 +104,27 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private final FormationFlightProducer producer;
   private final AuthValidator validator;
 
+
   public FormationPlugin(SabotContext context, String name, Provider<StoragePluginId> pluginIdProvider) {
     this.context = context;
     this.allocator = context.getAllocator().newChildAllocator("formation-" + name, 0, Long.MAX_VALUE);
-    this.thisLocation = Location.forGrpcInsecure(context.getEndpoint().getAddress(), context.getEndpoint().getUserPort() - FLIGHT_PORT);
+    String hostname = PropertyHelper.getFromEnvProperty("dremio.flight.host", context.getEndpoint().getAddress());
+    int port = Integer.parseInt(PropertyHelper.getFromEnvProperty("dremio.flight.port", Integer.toString(FLIGHT_PORT)));
+    FlightServer.Builder serverBuilder = FlightServer.builder().allocator(this.allocator);
+    Pair<Location, FlightServer.Builder> pair = SslHelper.sslHelper(
+      serverBuilder,
+      context.getDremioConfig(),
+      Boolean.parseBoolean(PropertyHelper.getFromEnvProperty("dremio.formation.use-ssl", "false")),
+      context.getEndpoint().getAddress(),
+      port,
+      hostname);
+    thisLocation = pair.getKey();
     this.producer = new FormationFlightProducer(thisLocation, allocator);
     this.validator = new AuthValidator(null, context);
-    this.server = FlightServer.builder().allocator(this.allocator).location(thisLocation).producer(producer).authHandler(new BasicServerAuthHandler(validator)).build();
+    this.server = pair.getRight().producer(producer).authHandler(new BasicServerAuthHandler(validator)).build();
     this.pluginIdProvider = pluginIdProvider;
     kvStore = context.getKVStoreProvider().getStore(FlightStoreCreator.class); //todo is this the right way to share state between executors?
+    logger.info("set up formation plugin on port {} and host {}", thisLocation.getUri().getPort(), thisLocation.getUri().getHost());
   }
 
 //  @Override

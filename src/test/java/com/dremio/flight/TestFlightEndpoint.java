@@ -15,6 +15,7 @@
  */
 package com.dremio.flight;
 
+import java.net.InetAddress;
 import java.util.Iterator;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
@@ -62,7 +63,6 @@ import io.protostuff.LinkedBuffer;
 public class TestFlightEndpoint extends BaseTestQuery {
 
   private static InitializerRegistry registry;
-  private static final LinkedBuffer buffer = LinkedBuffer.allocate();
   private static final ExecutorService tp = Executors.newFixedThreadPool(4);
   private static final Logger logger = LoggerFactory.getLogger(TestFlightEndpoint.class);
 
@@ -95,7 +95,8 @@ public class TestFlightEndpoint extends BaseTestQuery {
 
   @Test
   public void connect() throws Exception {
-    Location location = Location.forGrpcInsecure("localhost", 47470);
+    InetAddress ip = InetAddress.getLocalHost();
+    Location location = Location.forGrpcInsecure(ip.getHostName(), 47470);
     try (FlightClient c = flightClient(getAllocator(), location)) {
       c.authenticate(new BasicClientAuthHandler(SystemUser.SYSTEM_USERNAME, null));
       String sql = "select * from sys.options";
@@ -114,8 +115,9 @@ public class TestFlightEndpoint extends BaseTestQuery {
   @Test
   public void connectParallel() throws Exception {
     logger.debug("starting!");
+    InetAddress ip = InetAddress.getLocalHost();
     testNoResult("alter session set \"planner.slice_target\" = 10");
-    FlightClient c = FlightClient.builder().allocator(getAllocator()).location(Location.forGrpcInsecure("localhost", 47470)).build();
+    FlightClient c = FlightClient.builder().allocator(getAllocator()).location(Location.forGrpcInsecure(ip.getHostName(), 47470)).build();
     c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
     logger.debug("sending action message");
     Iterator<Result> action = c.doAction(new Action("PARALLEL"));

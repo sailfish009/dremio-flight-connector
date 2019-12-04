@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-FROM dremio/dremio-oss:latest
+FROM dremio/dremio-ee:4.0.4
 
 COPY target/dremio-flight-connector-0.11.0-SNAPSHOT-shaded.jar /opt/dremio/jars/
 

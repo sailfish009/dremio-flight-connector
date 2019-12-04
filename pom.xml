@@ -41,8 +41,8 @@
         Dependencies version for this module
         Submodules should rely on dependencixesManagement as much as possible
     -->
-    <arrow.flight.version>0.15.0</arrow.flight.version>
-    <version.dremio>4.0.2-201910020123580864-a98a0b9</version.dremio>
+    <arrow.flight.version>0.15.1</arrow.flight.version>
+    <version.dremio>4.0.4-201910212053580380-773b665</version.dremio>
     <junit.version>4.12</junit.version>
     <lilith.version>0.9.44</lilith.version>
     <slf4j.version>1.7.10</slf4j.version>

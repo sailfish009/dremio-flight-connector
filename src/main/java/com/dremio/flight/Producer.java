@@ -82,6 +82,7 @@ import com.dremio.exec.work.protector.UserResponseHandler;
 import com.dremio.exec.work.protector.UserResult;
 import com.dremio.exec.work.protector.UserWorker;
 import com.dremio.flight.formation.FlightStoreCreator;
+import com.dremio.flight.formation.FormationPlugin;
 import com.dremio.service.users.SystemUser;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -367,6 +368,11 @@ class Producer implements FlightProducer, AutoCloseable {
           } else {
             opName = String.valueOf(op);
           }
+          if (!"SCREEN".equals(opName)) {
+            logger.warn("Skipping {} as it is not a screen. MajorId {} and index {}", opName, majorId, i);
+            continue;
+          }
+          logger.warn("Creating ticket for {} as is a screen. MajorId {} and index {}", opName, majorId, i);
           Ticket ticket = new Ticket(JOINER.join(
             majorId,
             String.valueOf(i),
@@ -377,8 +383,9 @@ class Producer implements FlightProducer, AutoCloseable {
           FlightStoreCreator.NodeKey flightLocation = kvStore.get(FlightStoreCreator.NodeKey.fromNodeEndpoint(endpoint));
           Location location = null;
           if (flightLocation == null) {
-            int port = endpoint.getUserPort();
-            location = Location.forGrpcInsecure(endpoint.getAddress(), port - 12104);
+            int port = Integer.parseInt(PropertyHelper.getFromEnvProperty("dremio.flight.port", Integer.toString(FormationPlugin.FLIGHT_PORT)));
+            String host = PropertyHelper.getFromEnvProperty("dremio.flight.host", endpoint.getAddress());
+            location = Location.forGrpcInsecure(host, port);
           } else {
             location = flightLocation.toLocation();
           }

@@ -21,6 +21,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringWriter;
+import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -103,8 +104,9 @@ public class TestSslFlightEndpoint extends BaseTestQuery {
   }
 
   private static InputStream certs() throws GeneralSecurityException, IOException {
+    InetAddress ip = InetAddress.getLocalHost();
     final SSLConfigurator configurator = new SSLConfigurator(dremioConfig, DremioConfig.WEB_SSL_PREFIX, "web");
-    final Optional<SSLConfig> sslConfigOption = configurator.getSSLConfig(true, "localhost");
+    final Optional<SSLConfig> sslConfigOption = configurator.getSSLConfig(true, ip.getHostName());
     Preconditions.checkState(sslConfigOption.isPresent()); // caller's responsibility
     final SSLConfig sslConfig = sslConfigOption.get();
     KeyStore trustStore = null;
@@ -168,8 +170,8 @@ public class TestSslFlightEndpoint extends BaseTestQuery {
   @Test
   public void connect() throws Exception {
     certs();
-    Location location = Location.forGrpcTls("localhost", 47470);
-    Thread.sleep(Long.MAX_VALUE);
+    InetAddress ip = InetAddress.getLocalHost();
+    Location location = Location.forGrpcTls(ip.getHostName(), 47470);
     try (FlightClient c = flightClient(getAllocator(), location)) {
       c.authenticate(new BasicClientAuthHandler(SystemUser.SYSTEM_USERNAME, null));
       String sql = "select * from sys.options";
