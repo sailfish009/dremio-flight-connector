@@ -98,7 +98,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   private final BufferAllocator allocator;
   private final SabotContext context;
   private final FlightServer server;
-  private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
+//  private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
   private volatile List<FlightClient> clients = new ArrayList<>();
   private final Provider<StoragePluginId> pluginIdProvider;
   private final FormationFlightProducer producer;
@@ -123,7 +123,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
     this.validator = new AuthValidator(null, context);
     this.server = pair.getRight().producer(producer).authHandler(new BasicServerAuthHandler(validator)).build();
     this.pluginIdProvider = pluginIdProvider;
-    kvStore = context.getKVStoreProvider().getStore(FlightStoreCreator.class); //todo is this the right way to share state between executors?
+//    kvStore = context.getKVStoreProvider().getStore(FlightStoreCreator.class); //todo is this the right way to share state between executors?
     logger.info("set up formation plugin on port {} and host {}", thisLocation.getUri().getPort(), thisLocation.getUri().getHost());
   }
 
@@ -220,7 +220,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
       }
     });
     refreshClients();
-    kvStore.put(FlightStoreCreator.NodeKey.fromNodeEndpoint(context.getEndpoint()), FlightStoreCreator.NodeKey.fromFlightEndpoint(thisLocation));
+//    kvStore.put(FlightStoreCreator.NodeKey.fromNodeEndpoint(context.getEndpoint()), FlightStoreCreator.NodeKey.fromFlightEndpoint(thisLocation));
   }
 
   private synchronized void refreshClients() {
@@ -237,7 +237,7 @@ public class FormationPlugin implements StoragePlugin, MutablePlugin {
   @Override
   public void close() throws Exception {
     AutoCloseables.close(clients, ImmutableList.of(server, allocator));
-    kvStore.delete(FlightStoreCreator.NodeKey.fromNodeEndpoint(context.getEndpoint()));
+//    kvStore.delete(FlightStoreCreator.NodeKey.fromNodeEndpoint(context.getEndpoint()));
   }
 
   @Override

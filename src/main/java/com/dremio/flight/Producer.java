@@ -83,6 +83,7 @@ import com.dremio.exec.work.protector.UserResult;
 import com.dremio.exec.work.protector.UserWorker;
 import com.dremio.flight.formation.FlightStoreCreator;
 import com.dremio.flight.formation.FormationPlugin;
+import com.dremio.sabot.rpc.user.UserSession;
 import com.dremio.service.users.SystemUser;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -101,7 +102,7 @@ class Producer implements FlightProducer, AutoCloseable {
   private final Provider<SabotContext> context;
   private final BufferAllocator allocator;
   private final AuthValidator validator;
-  private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
+//  private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
 
   Producer(Location location, Provider<UserWorker> worker, Provider<SabotContext> context, BufferAllocator allocator, AuthValidator validator) {
     super();
@@ -110,7 +111,7 @@ class Producer implements FlightProducer, AutoCloseable {
     this.context = context;
     this.allocator = allocator;
     this.validator = validator;
-    kvStore = context.get().getKVStoreProvider().getStore(FlightStoreCreator.class);
+//    kvStore = context.get().getKVStoreProvider().getStore(FlightStoreCreator.class);
   }
 
   @Override
@@ -133,7 +134,7 @@ class Producer implements FlightProducer, AutoCloseable {
   }
 
   private FlightInfo getCoalesce(CallContext callContext, FlightDescriptor descriptor, Ticket cmd) {
-    PrepareParallel d = new PrepareParallel(kvStore);
+    PrepareParallel d = new PrepareParallel(null, validator.getUserSession(callContext), validator.getUserPassword(callContext));
     logger.debug("coalescing query {}", new String(cmd.getBytes()));
     RunQuery query;
     try {
@@ -277,13 +278,17 @@ class Producer implements FlightProducer, AutoCloseable {
   private class PrepareParallel implements UserResponseHandler {
 
     private final CompletableFuture<List<FlightEndpoint>> future = new CompletableFuture<>();
-    private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
+    private final UserSession session;
+    private final String pwd;
+    //    private final KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore;
     private List<FlightEndpoint> endpoints;
     private String queryId = "unknown";
 
 
-    public PrepareParallel(KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore) {
-      this.kvStore = kvStore;
+    public PrepareParallel(KVStore<FlightStoreCreator.NodeKey, FlightStoreCreator.NodeKey> kvStore, UserSession session, String pwd) {
+//      this.kvStore = kvStore;
+      this.session = session;
+      this.pwd = pwd;
     }
 
     public FlightInfo getInfo(FlightDescriptor descriptor, String queryId) {
@@ -297,7 +302,7 @@ class Producer implements FlightProducer, AutoCloseable {
             logger.debug("doing create action for ticket {}", ticketId);
             Ticket ticket = new Ticket(ticketId.getBytes());
             try (FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
-              c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
+              c.authenticateBasic(session.getCredentials().getUserName(), pwd);
               Iterator<Result> result = c.doAction(new Action("create", ticket.getBytes()));
               result.forEachRemaining(r -> {
                 logger.debug("got action result {} for ticket {}", new String(r.getBody()), ticketId);
@@ -332,7 +337,7 @@ class Producer implements FlightProducer, AutoCloseable {
         String ticketId = new String(e.getTicket().getBytes());
         try (FlightClient c = FlightClient.builder().allocator(allocator).location(e.getLocations().get(0)).build()) {
           logger.debug("running delete action for {}", ticketId);
-          c.authenticateBasic(SystemUser.SYSTEM_USERNAME, null);
+          c.authenticateBasic(session.getCredentials().getUserName(), pwd);
           Iterator<Result> results = c.doAction(new Action("delete", e.getTicket().getBytes()));
           results.forEachRemaining(r -> {
             logger.debug("got action result {} for ticket {}", new String(r.getBody()), ticketId);
@@ -380,7 +385,7 @@ class Producer implements FlightProducer, AutoCloseable {
             endpoint.getAddress(),
             endpoint.getUserPort()
           ).getBytes());
-          FlightStoreCreator.NodeKey flightLocation = kvStore.get(FlightStoreCreator.NodeKey.fromNodeEndpoint(endpoint));
+          FlightStoreCreator.NodeKey flightLocation = null;//kvStore.get(FlightStoreCreator.NodeKey.fromNodeEndpoint(endpoint));
           Location location = null;
           if (flightLocation == null) {
             int port = Integer.parseInt(PropertyHelper.getFromEnvProperty("dremio.flight.port", Integer.toString(FormationPlugin.FLIGHT_PORT)));

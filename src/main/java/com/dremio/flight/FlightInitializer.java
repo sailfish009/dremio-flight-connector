@@ -71,9 +71,14 @@ public class FlightInitializer implements Initializer<Void>, AutoCloseable {
 
     AuthValidator validator = new AuthValidator(provider.provider(UserService.class), provider.provider(SabotContext.class));
     FlightServer.Builder serverBuilder = FlightServer.builder().allocator(allocator).authHandler(new BasicServerAuthHandler(validator));
+    DremioConfig config = null;
+    try {
+      config = provider.lookup(DremioConfig.class);
+    } catch (Throwable t) {
+    }
     Pair<Location, FlightServer.Builder> pair = SslHelper.sslHelper(
       serverBuilder,
-      provider.lookup(DremioConfig.class),
+      config,
       useSsl,
       InetAddress.getLocalHost().getHostName(),
       port,

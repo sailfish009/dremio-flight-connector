@@ -48,6 +48,7 @@ import com.google.common.collect.Maps;
 public class AuthValidator implements BasicServerAuthHandler.BasicAuthValidator {
   private static final Logger logger = LoggerFactory.getLogger(AuthValidator.class);
   private final Map<ByteArrayWrapper, UserSession> sessions = new HashMap<>();
+  private final Map<ByteArrayWrapper, String> passwords = new HashMap<>();
   private final Map<ByteArrayWrapper, FlightSessionOptions> options = new HashMap<>();
   private final Map<String, ByteArrayWrapper> tokens = new HashMap<>();
   private final UserService userService;
@@ -76,6 +77,7 @@ public class AuthValidator implements BasicServerAuthHandler.BasicAuthValidator 
       }
       byte[] b = (user + ":" + password).getBytes();
       sessions.put(new ByteArrayWrapper(b), build(user, password));
+      passwords.put(new ByteArrayWrapper(b), password);
       options.put(new ByteArrayWrapper(b), new FlightSessionOptions());
       tokens.put(user, new ByteArrayWrapper(b));
       logger.info("authenticated {}", user);
@@ -88,7 +90,13 @@ public class AuthValidator implements BasicServerAuthHandler.BasicAuthValidator 
 
   @Override
   public Optional<String> isValid(byte[] bytes) {
-    String user = sessions.get(new ByteArrayWrapper(bytes)).getCredentials().getUserName();
+    logger.warn("Sessions: " + sessions.keySet().size() + " with entries " + sessions.keySet());
+    logger.warn("asking for " + new ByteArrayWrapper(bytes) + " it is " + ((sessions.containsKey(new ByteArrayWrapper(bytes))) ? "in" : "not in") + " the session set");
+    UserSession session = sessions.get(new ByteArrayWrapper(bytes));
+    String user = null;
+    if (session != null) {
+      user = session.getCredentials().getUserName();
+    }
     return Optional.ofNullable(user);
   }
 
@@ -105,6 +113,10 @@ public class AuthValidator implements BasicServerAuthHandler.BasicAuthValidator 
 
   public UserSession getUserSession(FlightProducer.CallContext callContext) {
     return sessions.get(tokens.get(callContext.peerIdentity()));
+  }
+
+  public String getUserPassword(FlightProducer.CallContext callContext) {
+    return passwords.get(tokens.get(callContext.peerIdentity()));
   }
 
   public FlightSessionOptions getSessionOptions(FlightProducer.CallContext callContext) {
