@@ -17,7 +17,6 @@ package com.dremio.flight;
 
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
 
@@ -31,16 +30,10 @@ import org.slf4j.LoggerFactory;
 import com.dremio.exec.proto.UserBitShared;
 import com.dremio.exec.proto.UserProtos;
 import com.dremio.exec.server.SabotContext;
-import com.dremio.options.OptionList;
-import com.dremio.options.OptionManager;
-import com.dremio.options.OptionValidator;
-import com.dremio.options.OptionValue;
-import com.dremio.options.TypeValidators;
 import com.dremio.sabot.rpc.user.UserSession;
 import com.dremio.service.users.SystemUser;
 import com.dremio.service.users.UserLoginException;
 import com.dremio.service.users.UserService;
-import com.google.common.collect.Maps;
 
 /**
  * user/pass validation for dremios arrow flight endpoint
@@ -108,6 +101,7 @@ public class AuthValidator implements BasicServerAuthHandler.BasicAuthValidator 
         UserProtos.UserProperties.newBuilder().addProperties(
           UserProtos.Property.newBuilder().setKey("password").setValue(password).build()
         ).build())
+      .setSupportComplexTypes(true)
       .build();
   }
 
@@ -134,6 +128,7 @@ public class AuthValidator implements BasicServerAuthHandler.BasicAuthValidator 
       isParallel = parallel;
     }
   }
+
   /**
    * wrapper class to make byte[] a map key
    */

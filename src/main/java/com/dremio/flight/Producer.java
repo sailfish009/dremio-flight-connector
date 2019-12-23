@@ -54,7 +54,9 @@ import com.dremio.common.utils.protos.ExternalIdHelper;
 import com.dremio.common.utils.protos.QueryIdHelper;
 import com.dremio.common.utils.protos.QueryWritableBatch;
 import com.dremio.datastore.KVStore;
-import com.dremio.exec.physical.config.UnionExchange;
+import com.dremio.exec.physical.base.AbstractPhysicalVisitor;
+import com.dremio.exec.physical.base.PhysicalOperator;
+import com.dremio.exec.physical.base.Writer;
 import com.dremio.exec.planner.fragment.PlanningSet;
 import com.dremio.exec.planner.fragment.Wrapper;
 import com.dremio.exec.proto.CoordinationProtos;
@@ -84,7 +86,6 @@ import com.dremio.exec.work.protector.UserWorker;
 import com.dremio.flight.formation.FlightStoreCreator;
 import com.dremio.flight.formation.FormationPlugin;
 import com.dremio.sabot.rpc.user.UserSession;
-import com.dremio.service.users.SystemUser;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
@@ -359,37 +360,37 @@ class Producer implements FlightProducer, AutoCloseable {
       final ImmutableList.Builder<FlightEndpoint> endpoints = ImmutableList.builder();
       for (Wrapper wrapper : planningSet.getFragmentWrapperMap().values()) {
         String majorId = String.valueOf(wrapper.getMajorFragmentId());
-        for (int i = 0; i < wrapper.getAssignedEndpoints().size(); i++) {
-          CoordinationProtos.NodeEndpoint endpoint = wrapper.getAssignedEndpoint(i);
-
-          String opName = null;
-          CoreOperatorType op = CoreOperatorType.valueOf(wrapper.getNode().getRoot().getOperatorType());
-          if (op == null) {
-            if (wrapper.getNode().getRoot() instanceof UnionExchange) {
-              opName = "UnionExchange";
-            } else {
-              logger.warn("unknown op type " + wrapper.getNode().getRoot());
-            }
-          } else {
-            opName = String.valueOf(op);
-          }
-          if (!"SCREEN".equals(opName)) {
-            logger.warn("Skipping {} as it is not a screen. MajorId {} and index {}", opName, majorId, i);
+        try {
+          Boolean isWriter = wrapper.getNode().getRoot().accept(new WriterVisitor(), false);
+          if (!isWriter) {
             continue;
           }
-          logger.warn("Creating ticket for {} as is a screen. MajorId {} and index {}", opName, majorId, i);
+        } catch (Throwable throwable) {
+          logger.warn("unable to complete visitor ", throwable);
+        }
+
+
+        CoreOperatorType op = CoreOperatorType.valueOf(wrapper.getNode().getRoot().getOperatorType());
+        if (CoreOperatorType.SCREEN.equals(op) && planningSet.getFragmentWrapperMap().size() > 1) {
+          logger.warn("Skipping {} as it is a screen and therefore lies above the writer. MajorId {}", op, majorId);
+          continue;
+        }
+
+        logger.info("Creating tickets for {}. MajorId {}", wrapper.getNode().getRoot(), majorId);
+        for (int i = 0; i < wrapper.getAssignedEndpoints().size(); i++) {
+          CoordinationProtos.NodeEndpoint endpoint = wrapper.getAssignedEndpoint(i);
+          logger.warn("Creating ticket for {} . MajorId {} and index {}", wrapper.getNode().getRoot(), majorId, i);
           Ticket ticket = new Ticket(JOINER.join(
             majorId,
             String.valueOf(i),
-            opName,
             endpoint.getAddress(),
             endpoint.getUserPort()
           ).getBytes());
           FlightStoreCreator.NodeKey flightLocation = null;//kvStore.get(FlightStoreCreator.NodeKey.fromNodeEndpoint(endpoint));
           Location location = null;
           if (flightLocation == null) {
-            int port = Integer.parseInt(PropertyHelper.getFromEnvProperty("dremio.flight.port", Integer.toString(FormationPlugin.FLIGHT_PORT)));
-            String host = PropertyHelper.getFromEnvProperty("dremio.flight.host", endpoint.getAddress());
+            int port = Integer.parseInt(PropertyHelper.getFromEnvProperty("dremio.formation.port", Integer.toString(FormationPlugin.FLIGHT_PORT)));
+            String host = PropertyHelper.getFromEnvProperty("dremio.formation.host", endpoint.getAddress());
             location = Location.forGrpcInsecure(host, port);
           } else {
             location = flightLocation.toLocation();
@@ -480,4 +481,26 @@ class Producer implements FlightProducer, AutoCloseable {
     list.onCompleted();
   }
 
+  private static class WriterVisitor extends AbstractPhysicalVisitor<Boolean, Boolean, Throwable> {
+
+    @Override
+    public Boolean visitWriter(Writer writer, Boolean value) throws Throwable {
+      return true;
+    }
+
+    @Override
+    public Boolean visitOp(PhysicalOperator op, Boolean value) throws Throwable {
+      return visitChildren(op, value);
+    }
+
+    @Override
+    public Boolean visitChildren(PhysicalOperator op, Boolean value) throws Throwable {
+      boolean isWriter = (value == null) ? false : value;
+      for (PhysicalOperator child : op) {
+        Boolean result = child.accept(this, value);
+        isWriter |= (result == null) ? false : result;
+      }
+      return isWriter;
+    }
+  }
 }

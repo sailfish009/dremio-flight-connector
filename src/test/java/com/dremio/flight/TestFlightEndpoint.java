@@ -53,9 +53,6 @@ import com.dremio.flight.formation.FormationConfig;
 import com.dremio.service.InitializerRegistry;
 import com.dremio.service.namespace.source.proto.SourceConfig;
 import com.dremio.service.users.SystemUser;
-import com.typesafe.config.ConfigValueFactory;
-
-import io.protostuff.LinkedBuffer;
 
 /**
  * Basic flight endpoint test
@@ -71,7 +68,7 @@ public class TestFlightEndpoint extends BaseTestQuery {
 
   @BeforeClass
   public static void init() throws Exception {
-    BaseTestQuery.updateTestCluster(4, config.withValue("dremio.test.query.printing.silent", ConfigValueFactory.fromAnyRef(false)));
+//    BaseTestQuery.updateTestCluster(4, config.withValue("dremio.test.query.printing.silent", ConfigValueFactory.fromAnyRef(false)));
     registry = new InitializerRegistry(ExecTest.CLASSPATH_SCAN_RESULT, getBindingProvider());
     registry.start();
     SourceConfig c = new SourceConfig();
@@ -123,6 +120,8 @@ public class TestFlightEndpoint extends BaseTestQuery {
     Iterator<Result> action = c.doAction(new Action("PARALLEL"));
     action.forEachRemaining(r -> System.out.println(r.toString()));
     logger.debug("received action message");
+    testNoResult("alter system set \"planner.query_max_split_limit\" = 1");
+    testNoResult("alter system set \"planner.slice_target\" = 1");
     String sql = "select * from sys.options";
     logger.debug("sending get schema message");
     SchemaResult schemaResult = c.getSchema(FlightDescriptor.command(sql.getBytes()));
@@ -160,11 +159,8 @@ public class TestFlightEndpoint extends BaseTestQuery {
       logger.error("total so far is {} after {} futures", total, totalCount);
       logger.error("We are waiting on {} futures", remainingFutures);
     }
-    long expected = 13460172;
-
+    Assert.assertTrue(total > 0);
     c.close();
-
-    System.out.println(total + "  " + expected);
   }
 
   private static AtomicInteger endpointsSubmitted = new AtomicInteger();
